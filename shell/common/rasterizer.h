@@ -6,14 +6,17 @@
 #define SHELL_COMMON_RASTERIZER_H_
 
 #include <memory>
+#include <optional>
 
 #include "flutter/common/settings.h"
 #include "flutter/common/task_runners.h"
 #include "flutter/flow/compositor_context.h"
 #include "flutter/flow/layers/layer_tree.h"
 #include "flutter/fml/closure.h"
+#include "flutter/fml/gpu_thread_merger.h"
 #include "flutter/fml/memory/weak_ptr.h"
 #include "flutter/fml/synchronization/waitable_event.h"
+#include "flutter/lib/ui/snapshot_delegate.h"
 #include "flutter/shell/common/pipeline.h"
 #include "flutter/shell/common/surface.h"
 
@@ -32,7 +35,7 @@ namespace flutter {
 /// and the on-screen render surface. The compositor context has all the GPU
 /// state necessary to render frames to the render surface.
 ///
-class Rasterizer final {
+class Rasterizer final : public SnapshotDelegate {
  public:
   //----------------------------------------------------------------------------
   /// @brief      Used to forward events from the rasterizer to interested
@@ -61,11 +64,17 @@ class Rasterizer final {
     ///                           the frame workload.
     ///
     virtual void OnFrameRasterized(const FrameTiming& frame_timing) = 0;
+
+    /// Time limit for a smooth frame. See `Engine::GetDisplayRefreshRate`.
+    virtual fml::Milliseconds GetFrameBudget() = 0;
   };
 
   // TODO(dnfield): remove once embedders have caught up.
   class DummyDelegate : public Delegate {
     void OnFrameRasterized(const FrameTiming&) override {}
+    fml::Milliseconds GetFrameBudget() override {
+      return fml::kDefaultFrameBudget;
+    }
   };
 
   //----------------------------------------------------------------------------
@@ -165,6 +174,8 @@ class Rasterizer final {
   /// @return     The weak pointer to the rasterizer.
   ///
   fml::WeakPtr<Rasterizer> GetWeakPtr() const;
+
+  fml::WeakPtr<SnapshotDelegate> GetSnapshotDelegate() const;
 
   //----------------------------------------------------------------------------
   /// @brief      Sometimes, it may be necessary to render the same frame again
@@ -343,7 +354,7 @@ class Rasterizer final {
   /// @param[in]  callback  The callback to execute when the next layer tree is
   ///                       rendered on-screen.
   ///
-  void SetNextFrameCallback(fml::closure callback);
+  void SetNextFrameCallback(const fml::closure& callback);
 
   //----------------------------------------------------------------------------
   /// @brief      Returns a pointer to the compositor context used by this
@@ -374,19 +385,55 @@ class Rasterizer final {
   ///
   /// @param[in]  max_bytes  The maximum byte size of resource that may be
   ///                        cached for GPU rendering.
+  /// @param[in]  from_user  Whether this request was from user code, e.g. via
+  ///                        the flutter/skia message channel, in which case
+  ///                        it should not be overridden by the platform.
   ///
-  void SetResourceCacheMaxBytes(int max_bytes);
+  void SetResourceCacheMaxBytes(size_t max_bytes, bool from_user);
+
+  //----------------------------------------------------------------------------
+  /// @brief      The current value of Skia's resource cache size, if a surface
+  ///             is present.
+  ///
+  /// @attention  This cache does not describe the entirety of GPU resources
+  ///             that may be cached. The `RasterCache` also holds very large
+  ///             GPU resources.
+  ///
+  /// @see        `RasterCache`
+  ///
+  /// @return     The size of Skia's resource cache, if available.
+  ///
+  std::optional<size_t> GetResourceCacheMaxBytes() const;
 
  private:
   Delegate& delegate_;
   TaskRunners task_runners_;
   std::unique_ptr<Surface> surface_;
   std::unique_ptr<flutter::CompositorContext> compositor_context_;
+  // This is the last successfully rasterized layer tree.
   std::unique_ptr<flutter::LayerTree> last_layer_tree_;
+  // Set when we need attempt to rasterize the layer tree again. This layer_tree
+  // has not successfully rasterized. This can happen due to the change in the
+  // thread configuration. This will be inserted to the front of the pipeline.
+  std::unique_ptr<flutter::LayerTree> resubmitted_layer_tree_;
   fml::closure next_frame_callback_;
+  bool user_override_resource_cache_bytes_;
+  std::optional<size_t> max_cache_bytes_;
   fml::WeakPtrFactory<Rasterizer> weak_factory_;
+  fml::RefPtr<fml::GpuThreadMerger> gpu_thread_merger_;
 
-  void DoDraw(std::unique_ptr<flutter::LayerTree> layer_tree);
+  // |SnapshotDelegate|
+  sk_sp<SkImage> MakeRasterSnapshot(sk_sp<SkPicture> picture,
+                                    SkISize picture_size) override;
+
+  // |SnapshotDelegate|
+  sk_sp<SkImage> ConvertToRasterImage(sk_sp<SkImage> image) override;
+
+  sk_sp<SkImage> DoMakeRasterSnapshot(
+      SkISize size,
+      std::function<void(SkCanvas*)> draw_callback);
+
+  RasterStatus DoDraw(std::unique_ptr<flutter::LayerTree> layer_tree);
 
   RasterStatus DrawToSurface(flutter::LayerTree& layer_tree);
 

@@ -11,11 +11,10 @@ ClipRectLayer::ClipRectLayer(const SkRect& clip_rect, Clip clip_behavior)
   FML_DCHECK(clip_behavior != Clip::none);
 }
 
-ClipRectLayer::~ClipRectLayer() = default;
-
 void ClipRectLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   SkRect previous_cull_rect = context->cull_rect;
-  if (context->cull_rect.intersect(clip_rect_)) {
+  children_inside_clip_ = context->cull_rect.intersect(clip_rect_);
+  if (children_inside_clip_) {
     context->mutators_stack.PushClipRect(clip_rect_);
     SkRect child_paint_bounds = SkRect::MakeEmpty();
     PrerollChildren(context, matrix, &child_paint_bounds);
@@ -33,13 +32,8 @@ void ClipRectLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
 void ClipRectLayer::UpdateScene(SceneUpdateContext& context) {
   FML_DCHECK(needs_system_composite());
 
-  scenic::Rectangle shape(context.session(),   // session
-                          clip_rect_.width(),  //  width
-                          clip_rect_.height()  //  height
-  );
-
   // TODO(liyuqian): respect clip_behavior_
-  SceneUpdateContext::Clip clip(context, shape, clip_rect_);
+  SceneUpdateContext::Clip clip(context, clip_rect_);
   UpdateSceneChildren(context);
 }
 
@@ -48,6 +42,9 @@ void ClipRectLayer::UpdateScene(SceneUpdateContext& context) {
 void ClipRectLayer::Paint(PaintContext& context) const {
   TRACE_EVENT0("flutter", "ClipRectLayer::Paint");
   FML_DCHECK(needs_painting());
+
+  if (!children_inside_clip_)
+    return;
 
   SkAutoCanvasRestore save(context.internal_nodes_canvas, true);
   context.internal_nodes_canvas->clipRect(clip_rect_,

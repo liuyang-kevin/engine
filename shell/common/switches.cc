@@ -36,22 +36,49 @@ struct SwitchDesc {
 #define DEF_SWITCHES_END };
 // clang-format on
 
-#if FLUTTER_RUNTIME_MODE != FLUTTER_RUNTIME_MODE_RELEASE
-
 // List of common and safe VM flags to allow to be passed directly to the VM.
+#if FLUTTER_RELEASE
+
+// clang-format off
+static const std::string gDartFlagsWhitelist[] = {
+    "--no-causal_async_stacks",
+};
+// clang-format on
+
+#else
+
 // clang-format off
 static const std::string gDartFlagsWhitelist[] = {
     "--max_profile_depth",
     "--profile_period",
     "--random_seed",
     "--enable_mirrors",
+    "--write-service-info",
+    "--sample-buffer-duration",
+    "--no-causal_async_stacks",
+    "--trace-reload",
+    "--trace-reload-verbose",
 };
 // clang-format on
 
-#endif
+#endif  // FLUTTER_RELEASE
 
 // Include again for struct definition.
 #include "flutter/shell/common/switches.h"
+
+// Define symbols for the ICU data that is linked into the Flutter library on
+// Android.  This is a workaround for crashes seen when doing dynamic lookups
+// of the engine's own symbols on some older versions of Android.
+#if OS_ANDROID
+extern uint8_t _binary_icudtl_dat_start[];
+extern uint8_t _binary_icudtl_dat_end[];
+
+static std::unique_ptr<fml::Mapping> GetICUStaticMapping() {
+  return std::make_unique<fml::NonOwnedMapping>(
+      _binary_icudtl_dat_start,
+      _binary_icudtl_dat_end - _binary_icudtl_dat_start);
+}
+#endif
 
 namespace flutter {
 
@@ -118,8 +145,6 @@ const std::string_view FlagForSwitch(Switch swtch) {
   return std::string_view();
 }
 
-#if FLUTTER_RUNTIME_MODE != FLUTTER_RUNTIME_MODE_RELEASE
-
 static bool IsWhitelistedDartVMFlag(const std::string& flag) {
   for (uint32_t i = 0; i < fml::size(gDartFlagsWhitelist); ++i) {
     const std::string& allowed = gDartFlagsWhitelist[i];
@@ -132,8 +157,6 @@ static bool IsWhitelistedDartVMFlag(const std::string& flag) {
   }
   return false;
 }
-
-#endif
 
 template <typename T>
 static bool GetSwitchValue(const fml::CommandLine& command_line,
@@ -223,6 +246,9 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
   settings.start_paused =
       command_line.HasOption(FlagForSwitch(Switch::StartPaused));
 
+  settings.enable_checked_mode =
+      command_line.HasOption(FlagForSwitch(Switch::EnableCheckedMode));
+
   settings.enable_dart_profiling =
       command_line.HasOption(FlagForSwitch(Switch::EnableDartProfiling));
 
@@ -295,17 +321,20 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
                                   &icu_symbol_prefix);
       command_line.GetOptionValue(FlagForSwitch(Switch::ICUNativeLibPath),
                                   &native_lib_path);
+
+#if OS_ANDROID
+      settings.icu_mapper = GetICUStaticMapping;
+#else
       settings.icu_mapper = [icu_symbol_prefix, native_lib_path] {
         return GetSymbolMapping(icu_symbol_prefix, native_lib_path);
       };
+#endif
     }
   }
 
   settings.use_test_fonts =
       command_line.HasOption(FlagForSwitch(Switch::UseTestFonts));
 
-#if FLUTTER_RUNTIME_MODE != FLUTTER_RUNTIME_MODE_RELEASE
-  command_line.GetOptionValue(FlagForSwitch(Switch::LogTag), &settings.log_tag);
   std::string all_dart_flags;
   if (command_line.GetOptionValue(FlagForSwitch(Switch::DartFlags),
                                   &all_dart_flags)) {
@@ -321,6 +350,9 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
     }
   }
 
+#if !FLUTTER_RELEASE
+  command_line.GetOptionValue(FlagForSwitch(Switch::LogTag), &settings.log_tag);
+
   settings.trace_skia =
       command_line.HasOption(FlagForSwitch(Switch::TraceSkia));
   settings.trace_systrace =
@@ -329,6 +361,9 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
 
   settings.dump_skp_on_shader_compilation =
       command_line.HasOption(FlagForSwitch(Switch::DumpSkpOnShaderCompilation));
+
+  settings.cache_sksl =
+      command_line.HasOption(FlagForSwitch(Switch::CacheSkSL));
 
   return settings;
 }

@@ -69,7 +69,12 @@ enum FramePhase {
 
 /// Time-related performance metrics of a frame.
 ///
-/// See [Window.onReportTimings] for how to get this.
+/// If you're using the whole Flutter framework, please use
+/// [SchedulerBinding.addTimingsCallback] to get this. It's preferred over using
+/// [Window.onReportTimings] directly because
+/// [SchedulerBinding.addTimingsCallback] allows multiple callbacks. If
+/// [SchedulerBinding] is unavailable, then see [Window.onReportTimings] for how
+/// to get this.
 ///
 /// The metrics in debug mode (`flutter run` without any flags) may be very
 /// different from those in profile and release modes due to the debug overhead.
@@ -171,18 +176,16 @@ enum AppLifecycleState {
   ///
   /// When the application is in this state, the engine will not call the
   /// [Window.onBeginFrame] and [Window.onDrawFrame] callbacks.
-  ///
-  /// Android apps in this state should assume that they may enter the
-  /// [suspending] state at any time.
   paused,
 
-  /// The application will be suspended momentarily.
+  /// The application is still hosted on a flutter engine but is detached from
+  /// any host views.
   ///
-  /// When the application is in this state, the engine will not call the
-  /// [Window.onBeginFrame] and [Window.onDrawFrame] callbacks.
-  ///
-  /// On iOS, this state is currently unused.
-  suspending,
+  /// When the application is in this state, the engine is running without
+  /// a view. It can either be in the progress of attaching a view when engine
+  /// was first initializes, or after the view being destroyed due to a Navigator
+  /// pop.
+  detached,
 }
 
 /// A representation of distances for each of the four edges of a rectangle,
@@ -618,12 +621,26 @@ class Window {
   Size get physicalSize => _physicalSize;
   Size _physicalSize = Size.zero;
 
+  /// The physical depth is the maximum elevation that the Window allows.
+  ///
+  /// Physical layers drawn at or above this elevation will have their elevation
+  /// clamped to this value. This can happen if the physical layer itself has
+  /// an elevation larger than available depth, or if some ancestor of the layer
+  /// causes it to have a cumulative elevation that is larger than the available
+  /// depth.
+  ///
+  /// The default value is [double.maxFinite], which is used for platforms that
+  /// do not specify a maximum elevation. This property is currently on expected
+  /// to be set to a non-default value on Fuchsia.
+  double get physicalDepth => _physicalDepth;
+  double _physicalDepth = double.maxFinite;
+
   /// The number of physical pixels on each side of the display rectangle into
   /// which the application can render, but over which the operating system
   /// will likely place system UI, such as the keyboard, that fully obscures
   /// any content.
   ///
-  /// When this changes, [onMetricsChanged] is called.
+  /// When this property changes, [onMetricsChanged] is called.
   ///
   /// The relationship between this [Window.viewInsets], [Window.viewPadding],
   /// and [Window.padding] are described in more detail in the documentation for
@@ -650,7 +667,7 @@ class Window {
   /// response to the soft keyboard being visible or hidden, whereas
   /// [Window.padding] will.
   ///
-  /// When this changes, [onMetricsChanged] is called.
+  /// When this property changes, [onMetricsChanged] is called.
   ///
   /// The relationship between this [Window.viewInsets], [Window.viewPadding],
   /// and [Window.padding] are described in more detail in the documentation for
@@ -665,6 +682,24 @@ class Window {
   ///    applications.
   WindowPadding get viewPadding => _viewPadding;
   WindowPadding _viewPadding = WindowPadding.zero;
+
+  /// The number of physical pixels on each side of the display rectangle into
+  /// which the application can render, but where the operating system will
+  /// consume input gestures for the sake of system navigation.
+  ///
+  /// For example, an operating system might use the vertical edges of the
+  /// screen, where swiping inwards from the edges takes users backward
+  /// through the history of screens they previously visited.
+  ///
+  /// When this property changes, [onMetricsChanged] is called.
+  ///
+  /// See also:
+  ///
+  ///  * [WidgetsBindingObserver], for a mechanism at the widgets layer to
+  ///    observe when this value changes.
+  ///  * [MediaQuery.of], a simpler mechanism for the same.
+  WindowPadding get systemGestureInsets => _systemGestureInsets;
+  WindowPadding _systemGestureInsets = WindowPadding.zero;
 
   /// The number of physical pixels on each side of the display rectangle into
   /// which the application can render, but which may be partially obscured by
@@ -697,9 +732,10 @@ class Window {
   WindowPadding _padding = WindowPadding.zero;
 
   /// A callback that is invoked whenever the [devicePixelRatio],
-  /// [physicalSize], [padding], or [viewInsets] values change, for example
-  /// when the device is rotated or when the application is resized (e.g. when
-  /// showing applications side-by-side on Android).
+  /// [physicalSize], [padding], [viewInsets], or [systemGestureInsets]
+  /// values change, for example when the device is rotated or when the
+  /// application is resized (e.g. when showing applications side-by-side
+  /// on Android).
   ///
   /// The engine invokes this callback in the same zone in which the callback
   /// was set.
@@ -899,6 +935,10 @@ class Window {
 
   /// A callback that is invoked to report the [FrameTiming] of recently
   /// rasterized frames.
+  ///
+  /// It's prefered to use [SchedulerBinding.addTimingsCallback] than to use
+  /// [Window.onReportTimings] directly because
+  /// [SchedulerBinding.addTimingsCallback] allows multiple callbacks.
   ///
   /// This can be used to see if the application has missed frames (through
   /// [FrameTiming.buildDuration] and [FrameTiming.rasterDuration]), or high
@@ -1143,6 +1183,18 @@ class Window {
       registrationZone.runUnaryGuarded(callback, data);
     };
   }
+
+
+  /// The embedder can specify data that the isolate can request synchronously
+  /// on launch. This accessor fetches that data.
+  ///
+  /// This data is persistent for the duration of the Flutter application and is
+  /// available even after isolate restarts. Because of this lifecycle, the size
+  /// of this data must be kept to a minimum.
+  ///
+  /// For asynchronous communication between the embedder and isolate, a
+  /// platform channel may be used.
+  ByteData getPersistentIsolateData() native 'Window_getPersistentIsolateData';
 }
 
 /// Additional accessibility features that may be enabled by the platform.
